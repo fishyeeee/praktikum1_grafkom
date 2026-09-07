@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Graphics Playground — Praktikum Grafika Komputer</title>
+<style>
+  :root{
+    --bg: #0d1117;
+    --panel: #131a24;
+    --line: #22303f;
+    --ink: #e8edf3;
+    --muted: #7d8ea3;
+    --accent: #52d1c2;   /* cyan-teal, aksen utama */
+    --accent2: #f2a94e;  /* oranye, aksen sekunder */
+    --danger: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family: 'Courier New', Consolas, monospace;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:28px 16px 60px;
+  }
+  h1{
+    font-size:1.4rem;
+    letter-spacing:0.5px;
+    margin:0 0 4px;
+    font-weight:600;
+  }
+  p.subtitle{
+    color:var(--muted);
+    margin:0 0 20px;
+    font-size:0.9rem;
+  }
+  #wrap{
+    display:flex;
+    gap:18px;
+    flex-wrap:wrap;
+    justify-content:center;
+    max-width:1000px;
+  }
+  #stage{
+    border:2px solid var(--line);
+    border-radius:6px;
+    background:#020409;
+    cursor:crosshair;
+  }
+  #hud{
+    width:260px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:16px;
+    font-size:0.82rem;
+    line-height:1.55;
+  }
+  #hud h2{
+    font-size:0.78rem;
+    text-transform:uppercase;
+    letter-spacing:1px;
+    color:var(--accent);
+    margin:0 0 10px;
+    border-bottom:1px solid var(--line);
+    padding-bottom:6px;
+  }
+  #hud .row{ display:flex; justify-content:space-between; margin-bottom:4px;}
+  #hud .row span:first-child{ color:var(--muted); }
+  #hud .keys{ margin-top:14px; color:var(--muted); }
+  #hud .keys b{ color:var(--ink); }
+  #score{ color:var(--accent2); font-weight:bold; }
+  #status{ color:var(--accent); font-weight:bold; }
+  footer{
+    margin-top:18px;
+    color:var(--muted);
+    font-size:0.78rem;
+    max-width:760px;
+    text-align:center;
+  }
+</style>
+</head>
+<body>
+
+<h1>Graphics Playground</h1>
+<p class="subtitle">DATA → COORDINATE → PRIMITIVE → DRAWING → FRAME → PIXEL</p>
+
+<div id="wrap">
+  <canvas id="stage" width="720" height="460"></canvas>
+
+  <div id="hud">
+    <h2>Info Panel</h2>
+    <div class="row"><span>Mouse X</span><span id="mx">-</span></div>
+    <div class="row"><span>Mouse Y</span><span id="my">-</span></div>
+    <div class="row"><span>Player X</span><span id="px">-</span></div>
+    <div class="row"><span>Player Y</span><span id="py">-</span></div>
+    <div class="row"><span>Skor (Challenge)</span><span id="score">0</span></div>
+    <div class="row"><span>Status</span><span id="status">RUNNING</span></div>
+
+    <div class="keys">
+      <b>Kontrol:</b><br>
+      W A S D / Panah &rarr; gerak player (state-based, bisa diagonal)<br>
+      C &rarr; ganti warna player (event-based)<br>
+      R &rarr; reset posisi &amp; skor (event-based)<br>
+      Spasi &rarr; pause / resume animasi (event-based)<br>
+      Klik canvas &rarr; spawn koin baru (mouse interaction)
+    </div>
+  </div>
+</div>
+
+<footer>
+  Challenge yang dipilih: <b>Collector Mini-Game</b> — player (persegi) harus
+  digerakkan untuk menabrak koin (circle) berwarna yang muncul acak di dalam canvas.
+  Setiap tabrakan menambah skor dan koin baru otomatis muncul.
+</footer>
+
+<script>
+/* =========================================================
+   GRAPHICS PLAYGROUND
+   Alur: Create Canvas -> Draw Primitive -> Set Color/Position
+         -> Animate -> Add Interaction
+   ========================================================= */
+
+// ---------- 1. CREATE CANVAS ----------
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+// Elemen HUD (DOM) untuk menampilkan data
+const elMX = document.getElementById('mx');
+const elMY = document.getElementById('my');
+const elPX = document.getElementById('px');
+const elPY = document.getElementById('py');
+const elScore = document.getElementById('score');
+const elStatus = document.getElementById('status');
+
+// ---------- 2. DATA DASAR (posisi, ukuran, warna) ----------
+
+// Data mouse (koordinat 2D relatif terhadap canvas)
+const mouse = { x: 0, y: 0 };
+
+// Data player (persegi yang dikendalikan keyboard)
+const player = {
+  x: W / 2,
+  y: H / 2,
+  size: 28,
+  speed: 4,          // kecepatan translasi per frame
+  colorIndex: 0
+};
+const playerColors = ['#52d1c2', '#f2a94e', '#ef5b5b', '#8e7cff', '#ffe66d'];
+
+// Data bola yang beranimasi otomatis (bouncing ball) -> contoh animasi frame murni
+const ball = {
+  x: 100,
+  y: 100,
+  r: 14,
+  vx: 2.4,
+  vy: 1.8,
+  color: '#f2a94e'
+};
+
+// Data koin (circle) untuk challenge "Collector Mini-Game"
+let coin = spawnCoin();
+let score = 0;
+
+// State animasi
+let isPaused = false;
+let frameCount = 0;
+
+// ---------- 3. STATE-BASED KEYBOARD (untuk translasi kontinu / multi-key) ----------
+const keysHeld = {}; // menyimpan status tombol yang sedang ditekan
+
+window.addEventListener('keydown', (e) => {
+  keysHeld[e.key.toLowerCase()] = true;
+
+  // ---------- EVENT-BASED KEYBOARD (aksi sekali tekan) ----------
+  if (e.key.toLowerCase() === 'c') {
+    // ganti warna player -> aksi diskrit, cukup sekali per tekan
+    player.colorIndex = (player.colorIndex + 1) % playerColors.length;
+  }
+  if (e.key.toLowerCase() === 'r') {
+    // reset posisi player & skor
+    player.x = W / 2;
+    player.y = H / 2;
+    score = 0;
+    elScore.textContent = score;
+  }
+  if (e.key === ' ') {
+    // toggle pause/resume
+    isPaused = !isPaused;
+    elStatus.textContent = isPaused ? 'PAUSED' : 'RUNNING';
+    e.preventDefault();
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  keysHeld[e.key.toLowerCase()] = false;
+});
+
+// ---------- 4. MOUSE INTERACTION ----------
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = Math.round(e.clientX - rect.left);
+  mouse.y = Math.round(e.clientY - rect.top);
+  elMX.textContent = mouse.x;
+  elMY.textContent = mouse.y;
+});
+
+canvas.addEventListener('click', () => {
+  // klik mouse men-spawn koin baru secara manual (event-based mouse interaction)
+  coin = spawnCoin(mouse.x, mouse.y);
+});
+
+// ---------- FUNGSI: spawn koin (circle) pada posisi random / tertentu ----------
+function spawnCoin(x, y) {
+  const margin = 20;
+  return {
+    x: x !== undefined ? clamp(x, margin, W - margin) : margin + Math.random() * (W - margin * 2),
+    y: y !== undefined ? clamp(y, margin, H - margin) : margin + Math.random() * (H - margin * 2),
+    r: 10,
+    color: '#ffe66d'
+  };
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+// ---------- 5. UPDATE DATA (dipanggil setiap frame) ----------
+function updatePlayer() {
+  // multi-key movement: beberapa tombol bisa aktif bersamaan -> gerak diagonal
+  if (keysHeld['w'] || keysHeld['arrowup'])    player.y -= player.speed;
+  if (keysHeld['s'] || keysHeld['arrowdown'])  player.y += player.speed;
+  if (keysHeld['a'] || keysHeld['arrowleft'])  player.x -= player.speed;
+  if (keysHeld['d'] || keysHeld['arrowright']) player.x += player.speed;
+
+  // BOUNDARY CHECKING -> objek utama tidak boleh keluar/hilang dari canvas
+  const half = player.size / 2;
+  player.x = clamp(player.x, half, W - half);
+  player.y = clamp(player.y, half, H - half);
+
+  elPX.textContent = Math.round(player.x);
+  elPY.textContent = Math.round(player.y);
+}
+
+function updateBall() {
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  // pantulan di dinding canvas (boundary checking untuk bola)
+  if (ball.x - ball.r < 0 || ball.x + ball.r > W) ball.vx *= -1;
+  if (ball.y - ball.r < 0 || ball.y + ball.r > H) ball.vy *= -1;
+}
+
+function checkCollision() {
+  // deteksi tabrakan sederhana player (rect) vs coin (circle)
+  const half = player.size / 2;
+  const closestX = clamp(coin.x, player.x - half, player.x + half);
+  const closestY = clamp(coin.y, player.y - half, player.y + half);
+  const dx = coin.x - closestX;
+  const dy = coin.y - closestY;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  if (dist < coin.r) {
+    score++;
+    elScore.textContent = score;
+    coin = spawnCoin(); // munculkan koin baru di posisi random
+  }
+}
+
+// ---------- 6. DRAW PRIMITIVE ----------
+
+function drawBackground() {
+  ctx.fillStyle = '#020409';
+  ctx.fillRect(0, 0, W, H);
+
+  // grid tipis sebagai referensi koordinat (garis / line primitive)
+  ctx.strokeStyle = '#141c26';
+  ctx.lineWidth = 1;
+  for (let gx = 0; gx <= W; gx += 40) {
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, H);
+    ctx.stroke();
+  }
+  for (let gy = 0; gy <= H; gy += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, gy);
+    ctx.lineTo(W, gy);
+    ctx.stroke();
+  }
+}
+
+function drawRectangleDemo() {
+  // RECTANGLE statis sebagai contoh primitive dasar
+  ctx.fillStyle = '#22303f';
+  ctx.fillRect(20, 20, 90, 50);
+  ctx.strokeStyle = '#52d1c2';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 20, 90, 50);
+}
+
+function drawLineDemo() {
+  // LINE statis
+  ctx.strokeStyle = '#f2a94e';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(140, 20);
+  ctx.lineTo(230, 70);
+  ctx.stroke();
+}
+
+function drawCircleDemo() {
+  // CIRCLE statis
+  ctx.fillStyle = '#8e7cff';
+  ctx.beginPath();
+  ctx.arc(280, 45, 25, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawTriangleDemo() {
+  // TRIANGLE statis -> dibentuk dari 3 titik koordinat (path)
+  ctx.fillStyle = '#ef5b5b';
+  ctx.beginPath();
+  ctx.moveTo(360, 20);   // titik puncak
+  ctx.lineTo(335, 70);   // titik kiri bawah
+  ctx.lineTo(385, 70);   // titik kanan bawah
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawBall() {
+  ctx.fillStyle = ball.color;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawCoin() {
+  ctx.fillStyle = coin.color;
+  ctx.beginPath();
+  ctx.arc(coin.x, coin.y, coin.r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff33';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawPlayer() {
+  const half = player.size / 2;
+  ctx.fillStyle = playerColors[player.colorIndex];
+  ctx.fillRect(player.x - half, player.y - half, player.size, player.size);
+  ctx.strokeStyle = '#ffffff55';
+  ctx.strokeRect(player.x - half, player.y - half, player.size, player.size);
+}
+
+function drawMouseMarker() {
+  // menampilkan koordinat mouse langsung di atas canvas
+  ctx.fillStyle = '#7d8ea3';
+  ctx.font = '12px Consolas, monospace';
+  ctx.fillText(`(${mouse.x}, ${mouse.y})`, mouse.x + 10, mouse.y - 10);
+
+  ctx.strokeStyle = '#7d8ea355';
+  ctx.beginPath();
+  ctx.moveTo(mouse.x - 6, mouse.y);
+  ctx.lineTo(mouse.x + 6, mouse.y);
+  ctx.moveTo(mouse.x, mouse.y - 6);
+  ctx.lineTo(mouse.x, mouse.y + 6);
+  ctx.stroke();
+}
+
+// ---------- 7. ANIMATION LOOP (requestAnimationFrame) ----------
+function gameLoop() {
+  if (!isPaused) {
+    frameCount++;
+
+    // UPDATE DATA
+    updatePlayer();
+    updateBall();
+    checkCollision();
+  }
+
+  // DRAW FRAME
+  drawBackground();
+  drawRectangleDemo();
+  drawLineDemo();
+  drawCircleDemo();
+  drawTriangleDemo();
+  drawBall();
+  drawCoin();
+  drawPlayer();
+  drawMouseMarker();
+
+  // REPEAT -> minta browser menggambar frame berikutnya
+  requestAnimationFrame(gameLoop);
+}
+
+// mulai animation loop
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
